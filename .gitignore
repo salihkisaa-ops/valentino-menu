@@ -7,9 +7,9 @@
 # ── Veritabanı konfigürasyonu (gerçek şifreler burada) ───────
 includes/config.php
 
-# ── SQL kurulum dosyaları ─────────────────────────────────────
+# ── SQL kurulum dosyaları ve kurulum rehberleri ───────────────
 database/
-NEW_SERVER_SETUP/*.sql
+NEW_SERVER_SETUP/
 
 # ── Ürün detay sayfası ────────────────────────────────────────
 product-detail.php
