@@ -1,0 +1,78 @@
+# =============================================================
+# QR Menü — .gitignore
+# Bu dosyayı config.php.example'dan kopyalayarak ayarlayın:
+#   cp includes/config.php.example includes/config.php
+# =============================================================
+
+# ── Veritabanı konfigürasyonu (gerçek şifreler burada) ───────
+includes/config.php
+
+# ── SQL kurulum dosyaları ─────────────────────────────────────
+database/
+NEW_SERVER_SETUP/*.sql
+
+# ── Ürün detay sayfası ────────────────────────────────────────
+product-detail.php
+
+# ── Çalışma zamanı logları ────────────────────────────────────
+*.log
+php_errors.log
+error_log
+
+# ── Yüklenen medya (işletmeye özgü içerik) ───────────────────
+assets/img/products/
+assets/img/categories/
+
+# İşletmeye özgü logo/video — kendi dosyalarınızla değiştirin
+assets/img/gallant-logo.jpeg
+assets/img/gallant-new-logo.png
+assets/img/gallant-video.mp4
+assets/img/gallant-video.webm
+assets/img/gallant-logo-*.png
+assets/img/gallant-logo-*.jpg
+assets/img/gallant-video-*.mp4
+assets/img/gallant-video-*.webm
+
+# img-2 (yedek/kopyalar)
+img-2/
+
+# ── Arşiv dosyaları ───────────────────────────────────────────
+*.zip
+*.tar.gz
+*.rar
+
+# ── Veri dosyaları (Excel, CSV exportlar) ────────────────────
+*.xlsx
+*.xls
+*.csv
+
+# ── İşletim sistemi çöpü ─────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+desktop.ini
+
+# ── IDE ───────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# ── PHP bağımlılık yöneticisi (yoksa da sorun olmaz) ─────────
+vendor/
+composer.lock
+
+# ── Node (Tailwind CLI vb. kullanılırsa) ─────────────────────
+node_modules/
+npm-debug.log*
+
+# ── Geçici / yedek dosyalar ───────────────────────────────────
+*.bak
+*.backup
+*.old
+*.tmp
+*.swp
+*~

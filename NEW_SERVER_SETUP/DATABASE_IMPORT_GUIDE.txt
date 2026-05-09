@@ -1,0 +1,187 @@
+╔════════════════════════════════════════════════════════════════╗
+║          YENİ SUNUCU VERİTABANI KURULUM REHBERİ               ║
+╚════════════════════════════════════════════════════════════════╝
+
+📦 HAZIRLADIĞIMIZ DOSYALAR:
+─────────────────────────────────────────────────────────────────
+
+📁 NEW_SERVER_SETUP.zip (31KB)
+   ├── COMPLETE_NEW_SERVER_INSTALL.sql (125KB) ⭐ ANA DOSYA
+   ├── QUICK_INSTALL.sql (5KB) 
+   ├── KURULUM_REHBERI.md (Detaylı Rehber)
+   ├── OKUMAZLIK.md (Hızlı Başlangıç)
+   └── config.php.example (Config Şablonu)
+
+═══════════════════════════════════════════════════════════════
+
+🎯 ADIM ADIM KURULUM
+
+═══════════════════════════════════════════════════════════════
+
+ADIM 1: VERİTABANI OLUŞTUR
+─────────────────────────────────────────────────────────────────
+cPanel → phpMyAdmin → SQL sekmesi
+
+Şunu çalıştır:
+
+    CREATE DATABASE u398002296_menu 
+    CHARACTER SET utf8mb4 
+    COLLATE utf8mb4_unicode_ci;
+
+─────────────────────────────────────────────────────────────────
+
+ADIM 2: SQL DOSYASINI İMPORT ET
+─────────────────────────────────────────────────────────────────
+1. Sol menüden "u398002296_menu" veritabanını seç
+2. Üst menüden "İçe Aktar" (Import) sekmesine tıkla
+3. "Dosya seç" → COMPLETE_NEW_SERVER_INSTALL.sql
+4. Karakter seti: utf8mb4 seç
+5. "Git" (Go) butonuna tıkla
+
+✅ Başarılı mesajı görmelisiniz!
+
+─────────────────────────────────────────────────────────────────
+
+ADIM 3: TABLOLARI KONTROL ET
+─────────────────────────────────────────────────────────────────
+SQL sekmesinde şunu çalıştır:
+
+    SHOW TABLES;
+
+Görmüş olmanız gerekenler:
+✓ categories (10 kayıt)
+✓ products (108+ kayıt)
+✓ settings (15+ kayıt)
+✓ languages (21 kayıt)
+✓ chat_assistant_settings (1 kayıt)
+✓ chat_responses (550+ kayıt)
+✓ stories (0 kayıt)
+✓ time_based_menu (0 kayıt)
+
+─────────────────────────────────────────────────────────────────
+
+ADIM 4: VERİLERİ KONTROL ET
+─────────────────────────────────────────────────────────────────
+Test sorguları:
+
+-- Kategoriler
+SELECT * FROM categories ORDER BY sort_order;
+
+-- Ürünler
+SELECT COUNT(*) as toplam_urun FROM products WHERE is_active = 1;
+
+-- Diller
+SELECT code, name, is_active FROM languages ORDER BY sort_order;
+
+-- Ayarlar
+SELECT setting_key, setting_value FROM settings;
+
+─────────────────────────────────────────────────────────────────
+
+ADIM 5: CONFIG DOSYASINI GÜNCELLE
+─────────────────────────────────────────────────────────────────
+includes/config.php dosyasını aç ve güncelle:
+
+define('DB_HOST', 'localhost');
+define('DB_NAME', 'u398002296_menu');
+define('DB_USER', 'u398002296_menu_user');
+define('DB_PASS', 'menuuser**1@K');
+define('DB_CHARSET', 'utf8mb4');
+
+─────────────────────────────────────────────────────────────────
+
+ADIM 6: ADMİN PANELİ TEST ET
+─────────────────────────────────────────────────────────────────
+URL: https://siteniz.com/admin/login.php
+
+Kullanıcı Adı: admin
+Şifre: admin123
+
+⚠️ Giriş yaptıktan sonra şifreyi değiştir!
+
+─────────────────────────────────────────────────────────────────
+
+ADIM 7: SİTEYİ TEST ET
+─────────────────────────────────────────────────────────────────
+URL: https://siteniz.com/menu.php
+
+Kontrol et:
+✓ Kategoriler görünüyor mu?
+✓ Ürünler listeleniyor mu?
+✓ Dil menüsü çalışıyor mu?
+✓ Chat asistan açılıyor mu?
+✓ Ürün detayları açılıyor mu?
+
+═══════════════════════════════════════════════════════════════
+
+🐛 SORUN GİDERME
+
+═══════════════════════════════════════════════════════════════
+
+HATA: "Connection failed"
+─────────────────────────────────────────────────────────────────
+✓ config.php'deki veritabanı bilgilerini kontrol et
+✓ Veritabanı kullanıcısının izinleri var mı kontrol et
+
+─────────────────────────────────────────────────────────────────
+
+HATA: "Türkçe karakterler bozuk"
+─────────────────────────────────────────────────────────────────
+SQL çalıştır:
+
+ALTER DATABASE kurulumtsl_galantcoffe 
+CHARACTER SET utf8mb4 
+COLLATE utf8mb4_unicode_ci;
+
+─────────────────────────────────────────────────────────────────
+
+HATA: "Table doesn't exist"
+─────────────────────────────────────────────────────────────────
+SQL import eksik kalmış olabilir. Tekrar dene:
+1. DROP DATABASE kurulumtsl_galantcoffe;
+2. CREATE DATABASE kurulumtsl_galantcoffe...
+3. SQL dosyasını tekrar import et
+
+═══════════════════════════════════════════════════════════════
+
+📊 VERİTABANI İSTATİSTİKLERİ
+
+═══════════════════════════════════════════════════════════════
+
+Tablolar: 8
+Toplam Satır: 700+
+Veritabanı Boyutu: ~352 KB
+Karakter Seti: utf8mb4_unicode_ci
+
+KATEGORİLER:
+─────────────────────────────────────────────────────────────────
+1. Dünya Kahveleri (19 ürün)
+2. Filtre Kahveler (4 ürün)
+3. Türk Kahvesi (2 ürün)
+4. Soğuk İçecekler (24 ürün)
+5. Sıcak İçecekler (4 ürün)
+6. Çaylar (9 ürün)
+7. Tatlılar (17 ürün)
+8. Kruvasan (6 ürün)
+9. Kahvaltılar (10 ürün)
+10. Cookieler (3 ürün)
+
+═══════════════════════════════════════════════════════════════
+
+📞 DESTEK
+
+═══════════════════════════════════════════════════════════════
+
+Sorun yaşarsanız:
+- KURULUM_REHBERI.md dosyasını okuyun
+- phpMyAdmin'den tabloları kontrol edin
+- config.php dosyasını gözden geçirin
+
+═══════════════════════════════════════════════════════════════
+
+✅ KURULUM TAMAMLANDI!
+
+Artık yeni sunucunuzda Gallant Galata QR menü sistemi 
+hazır ve çalışır durumda!
+
+═══════════════════════════════════════════════════════════════

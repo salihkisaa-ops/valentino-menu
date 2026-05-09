@@ -1,0 +1,416 @@
+<?php
+/**
+ * Valéntino Patisserié — Veritabanı Konfigürasyonu
+ * PHP 8.2+ Compatible - LiteSpeed/cPanel/Hostinger Optimized
+ *
+ * Kullanım:
+ *   Bu dosyayı kopyalayın: cp includes/config.php.example includes/config.php
+ *   Ardından aşağıdaki değerleri gerçek bilgilerinizle doldurun.
+ */
+
+// Veritabanı Bağlantı Bilgileri
+define('DB_HOST', 'localhost');
+define('DB_NAME', 'your_db_name');
+define('DB_USER', 'your_db_user');
+define('DB_PASS', 'your_db_password');
+define('DB_CHARSET', 'utf8mb4');
+
+// Site Ayarları - Dinamik URL (her sunucuda çalışır)
+if (!defined('SITE_URL')) {
+    $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+    $host   = $_SERVER['HTTP_HOST'] ?? 'localhost';
+    $scriptDir = str_replace('\\', '/', dirname($_SERVER['SCRIPT_NAME'] ?? ''));
+    $scriptDir = preg_replace('#/(includes|admin|api)(/.*)?$#', '', $scriptDir);
+    $scriptDir = rtrim($scriptDir, '/');
+    define('SITE_URL', $scheme . '://' . $host . $scriptDir);
+}
+define('UPLOAD_PATH', __DIR__ . '/../assets/img/products/');
+define('UPLOAD_URL', SITE_URL . '/assets/img/products/');
+
+// Türkiye saat dilimini ayarla
+date_default_timezone_set('Europe/Istanbul');
+
+// Production: Hataları gizle, sadece logla
+error_reporting(0);
+ini_set('display_errors', '0');
+ini_set('log_errors', '1');
+ini_set('error_log', __DIR__ . '/../php_errors.log');
+
+// Oturum başlat (basit ve güvenli)
+if (session_status() === PHP_SESSION_NONE) {
+    $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ||
+               (!empty($_SERVER['HTTP_X_FORWARDED_PROTO']) && $_SERVER['HTTP_X_FORWARDED_PROTO'] === 'https') ||
+               (!empty($_SERVER['SERVER_PORT']) && $_SERVER['SERVER_PORT'] == 443);
+
+    session_start([
+        'cookie_lifetime' => 86400,
+        'cookie_secure' => $isHttps,
+        'cookie_httponly' => true,
+        'cookie_samesite' => 'Lax',
+        'use_strict_mode' => true,
+    ]);
+}
+
+/**
+ * PDO ile Veritabanı Bağlantısı
+ */
+function getDB() {
+    static $pdo = null;
+
+    if ($pdo === null) {
+        try {
+            $dsn = "mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=" . DB_CHARSET;
+
+            $options = [
+                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                PDO::ATTR_EMULATE_PREPARES => false,
+            ];
+
+            $pdo = new PDO($dsn, DB_USER, DB_PASS, $options);
+
+        } catch (PDOException $e) {
+            error_log("Database connection error: " . $e->getMessage());
+
+            if (strpos($_SERVER['REQUEST_URI'] ?? '', '/api/') !== false) {
+                header('Content-Type: application/json; charset=utf-8');
+                http_response_code(500);
+                echo json_encode(['success' => false, 'error' => 'Veritabanı hatası']);
+                exit;
+            }
+
+            die("Veritabanı bağlantısı kurulamadı.");
+        }
+    }
+
+    return $pdo;
+}
+
+// ---- Aşağıdaki fonksiyonlar config.php ile aynıdır, değiştirmeyin ----
+
+function getSetting($key, $default = '') {
+    try {
+        $pdo = getDB();
+        $stmt = $pdo->prepare("SELECT setting_value FROM settings WHERE setting_key = ?");
+        $stmt->execute([$key]);
+        $result = $stmt->fetch();
+        return $result ? (string)$result['setting_value'] : $default;
+    } catch (Exception $e) {
+        return $default;
+    }
+}
+
+function updateSetting($key, $value) {
+    try {
+        $pdo = getDB();
+        $stmt = $pdo->prepare(
+            "INSERT INTO settings (setting_key, setting_value)
+             VALUES (?, ?)
+             ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)"
+        );
+        return $stmt->execute([$key, $value]);
+    } catch (Exception $e) {
+        return false;
+    }
+}
+
+function getDisplayCafeName(): string {
+    $default = 'Valéntino Patisserié';
+    try {
+        $raw = trim((string)getSetting('cafe_name', $default));
+    } catch (Exception $e) {
+        return $default;
+    }
+    if ($raw === '') return $default;
+    $raw = preg_replace('/[\x{200B}-\x{200D}\x{FEFF}]/u', '', $raw);
+    $raw = str_replace("\xc2\xa0", ' ', $raw);
+    $normalized = preg_replace('/\s+/u', ' ', trim($raw));
+    $normalized = str_replace(['-', '_', '–', '—'], ' ', $normalized);
+    $normalized = preg_replace('/\s+/u', ' ', trim($normalized));
+    $normalized = mb_strtolower($normalized, 'UTF-8');
+    $legacyExact = ['gallant üsküdar', 'gallant uskudar', 'gallant galata', 'gallant antalya'];
+    if (in_array($normalized, $legacyExact, true) || preg_match('/\bgallant\b/u', $normalized)) {
+        return $default;
+    }
+    return $raw;
+}
+
+/**
+ * Admin kimlik bilgileri — yönetim panelinde ayarlanır.
+ * İlk kurulumda CREATE_ADMIN_USER.sql ile oluşturulan kullanıcı geçerlidir.
+ */
+function getAdminCredentials(): array {
+    $defaultUser = 'admin';
+    $defaultPass = 'change_this_password';
+    try {
+        $u = trim((string)getSetting('admin_username', $defaultUser));
+        $p = trim((string)getSetting('admin_password', $defaultPass));
+    } catch (Exception $e) {
+        return [$defaultUser, $defaultPass];
+    }
+    if ($u === '') $u = $defaultUser;
+    if ($p === '') $p = $defaultPass;
+    return [$u, $p];
+}
+
+function getAdminFallbackCredentials(): array {
+    return ['admin', 'change_this_password'];
+}
+
+function getAdminLoginFallbackPairs(): array {
+    return [
+        ['admin', 'change_this_password'],
+    ];
+}
+
+function admin_stored_password_matches(string $plain, string $stored): bool {
+    $stored = trim((string)$stored);
+    if ($stored === '') return $plain === '';
+    if (preg_match('/^\$(2[ayb]|argon2)/', $stored)) return password_verify($plain, $stored);
+    return hash_equals($stored, $plain);
+}
+
+function normalize_admin_login_field(string $s): string {
+    $s = preg_replace('/[\x{200B}-\x{200D}\x{FEFF}\x{2028}\x{2029}]/u', '', $s);
+    $s = str_replace("\xc2\xa0", ' ', $s);
+    $s = preg_replace('/\s+/u', ' ', trim($s));
+    return trim($s);
+}
+
+function admin_login_matches(string $inputUser, string $inputPass): bool {
+    $iu = normalize_admin_login_field($inputUser);
+    $ip = normalize_admin_login_field($inputPass);
+    if ($iu === '' || $ip === '') return false;
+    [$dbUser, $dbPass] = getAdminCredentials();
+    $dbUserNorm = normalize_admin_login_field($dbUser);
+    if (strcasecmp($iu, $dbUserNorm) === 0 && admin_stored_password_matches($ip, $dbPass)) return true;
+    foreach (getAdminLoginFallbackPairs() as [$u, $p]) {
+        $un = normalize_admin_login_field($u);
+        if (strcasecmp($iu, $un) === 0 && admin_stored_password_matches($ip, $p)) return true;
+    }
+    return false;
+}
+
+function normalize_uploaded_image_mime(string $tmpPath): ?string {
+    if ($tmpPath === '' || !is_uploaded_file($tmpPath)) return null;
+    $mime = '';
+    if (function_exists('finfo_open')) {
+        $fi = @finfo_open(FILEINFO_MIME_TYPE);
+        if ($fi) { $mime = strtolower((string)finfo_file($fi, $tmpPath)); finfo_close($fi); }
+    }
+    if ($mime === '' || $mime === 'application/octet-stream') {
+        if (function_exists('mime_content_type')) $mime = strtolower((string)@mime_content_type($tmpPath));
+    }
+    return match ($mime) {
+        'image/jpeg', 'image/jpg', 'image/pjpeg' => 'image/jpeg',
+        'image/png' => 'image/png',
+        'image/webp' => 'image/webp',
+        'image/gif' => 'image/gif',
+        default => null,
+    };
+}
+
+function extension_for_normalized_image(string $normalizedMime): string {
+    return match ($normalizedMime) {
+        'image/jpeg' => 'jpg', 'image/png' => 'png',
+        'image/webp' => 'webp', 'image/gif' => 'gif', default => 'jpg',
+    };
+}
+
+function normalize_uploaded_video_mime(string $tmpPath): ?string {
+    if ($tmpPath === '' || !is_uploaded_file($tmpPath)) return null;
+    $mime = '';
+    if (function_exists('finfo_open')) {
+        $fi = @finfo_open(FILEINFO_MIME_TYPE);
+        if ($fi) { $mime = strtolower((string)finfo_file($fi, $tmpPath)); finfo_close($fi); }
+    }
+    if ($mime === '' || $mime === 'application/octet-stream') {
+        if (function_exists('mime_content_type')) $mime = strtolower((string)@mime_content_type($tmpPath));
+    }
+    return match ($mime) {
+        'video/mp4', 'video/x-msvideo' => 'video/mp4',
+        'video/webm' => 'video/webm',
+        'video/ogg', 'application/ogg' => 'video/ogg',
+        default => null,
+    };
+}
+
+function extension_for_normalized_video(string $normalizedMime): string {
+    return match ($normalizedMime) {
+        'video/mp4' => 'mp4', 'video/webm' => 'webm', 'video/ogg' => 'ogg', default => 'mp4',
+    };
+}
+
+function get_site_logo_filename(): string {
+    $default = 'gallant-new-logo.png';
+    $fn = basename(trim((string)getSetting('logo', $default)));
+    if ($fn === '') $fn = $default;
+    $full = dirname(__DIR__) . '/assets/img/' . $fn;
+    if (!is_file($full)) return $default;
+    return $fn;
+}
+
+function get_footer_partner_logo_filename(): ?string {
+    return 'knot-logo.png';
+}
+
+function getCategories($activeOnly = true) {
+    try {
+        $pdo = getDB();
+        $sql = "SELECT c.*, COUNT(p.id) as product_count
+                FROM categories c
+                LEFT JOIN products p ON c.id = p.category_id AND p.is_active = 1
+                " . ($activeOnly ? "WHERE c.is_active = 1" : "") . "
+                GROUP BY c.id
+                ORDER BY c.sort_order ASC";
+        $stmt = $pdo->query($sql);
+        $categories = $stmt->fetchAll();
+        $timeBasedOrder = getActiveTimeBasedMenuOrder();
+        if (!empty($timeBasedOrder) && is_array($timeBasedOrder)) {
+            $categoriesById = [];
+            foreach ($categories as $cat) $categoriesById[$cat['id']] = $cat;
+            $orderedCategories = [];
+            foreach ($timeBasedOrder as $catId) {
+                if (isset($categoriesById[$catId])) { $orderedCategories[] = $categoriesById[$catId]; unset($categoriesById[$catId]); }
+            }
+            foreach ($categoriesById as $cat) $orderedCategories[] = $cat;
+            return $orderedCategories;
+        }
+        return $categories;
+    } catch (Exception $e) { return []; }
+}
+
+function getActiveTimeBasedMenuOrder() {
+    try {
+        $pdo = getDB();
+        $tableCheck = $pdo->query("SHOW TABLES LIKE 'time_based_menu'");
+        if ($tableCheck->rowCount() === 0) return null;
+        $columnsResult = $pdo->query("SHOW COLUMNS FROM time_based_menu");
+        $columns = $columnsResult->fetchAll(PDO::FETCH_COLUMN);
+        $hasDaysOfWeek = in_array('days_of_week', $columns);
+        $hasPriority = in_array('priority', $columns);
+        $hasCategoryOrder = in_array('category_order', $columns);
+        if (!$hasCategoryOrder) return null;
+        $currentTime = date('H:i:s');
+        $currentDay = (int)date('w');
+        $sql = "SELECT * FROM time_based_menu WHERE is_active = 1";
+        $params = [];
+        if ($hasDaysOfWeek) { $sql .= " AND (days_of_week IS NULL OR days_of_week = '' OR FIND_IN_SET(?, days_of_week) > 0)"; $params[] = $currentDay; }
+        $sql .= " AND ((start_time < end_time AND ? >= start_time AND ? <= end_time) OR (start_time > end_time AND (? >= start_time OR ? <= end_time)) OR (start_time = end_time))";
+        $params = array_merge($params, [$currentTime, $currentTime, $currentTime, $currentTime]);
+        $sql .= $hasPriority ? " ORDER BY priority DESC, id DESC LIMIT 1" : " ORDER BY id DESC LIMIT 1";
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
+        $timeSlot = $stmt->fetch();
+        if ($timeSlot && isset($timeSlot['category_order']) && !empty($timeSlot['category_order'])) {
+            $order = json_decode($timeSlot['category_order'], true);
+            return is_array($order) ? $order : null;
+        }
+        return null;
+    } catch (Exception $e) { return null; }
+}
+
+function getCategory($id) {
+    $pdo = getDB();
+    $stmt = $pdo->prepare("SELECT * FROM categories WHERE id = ?");
+    $stmt->execute([$id]);
+    return $stmt->fetch();
+}
+
+function getProducts($categoryId = null, $activeOnly = true, $limit = null) {
+    $pdo = getDB();
+    $sql = "SELECT p.*, c.name as category_name FROM products p LEFT JOIN categories c ON p.category_id = c.id WHERE 1=1";
+    $params = [];
+    if ($activeOnly) $sql .= " AND p.is_active = 1";
+    if ($categoryId) { $sql .= " AND p.category_id = ?"; $params[] = $categoryId; }
+    $sql .= " ORDER BY p.sort_order ASC, p.id DESC";
+    if ($limit) $sql .= " LIMIT " . (int)$limit;
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
+    return $stmt->fetchAll();
+}
+
+function getPopularProducts($limit = 8) {
+    try {
+        $pdo = getDB();
+        $recommendedProductsJson = getSetting('home_recommended_products', '[]');
+        $recommendedProducts = json_decode($recommendedProductsJson, true);
+        if (is_array($recommendedProducts) && !empty($recommendedProducts)) {
+            $activeProducts = array_filter($recommendedProducts, fn($p) => isset($p['active']) && ($p['active'] == 1 || $p['active'] === '1' || $p['active'] === true));
+            if (empty($activeProducts)) return [];
+            usort($activeProducts, fn($a, $b) => (isset($a['order']) ? (int)$a['order'] : 999) - (isset($b['order']) ? (int)$b['order'] : 999));
+            $ids = array_column($activeProducts, 'id');
+            if ($limit) $ids = array_slice($ids, 0, $limit);
+            if (empty($ids)) return [];
+            $placeholders = implode(',', array_fill(0, count($ids), '?'));
+            $sql = "SELECT p.*, c.name as category_name FROM products p LEFT JOIN categories c ON p.category_id = c.id WHERE p.is_active = 1 AND p.id IN ($placeholders) ORDER BY FIELD(p.id, $placeholders)";
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute(array_merge($ids, $ids));
+            return $stmt->fetchAll();
+        }
+        $stmt = $pdo->prepare("SELECT p.*, c.name as category_name FROM products p LEFT JOIN categories c ON p.category_id = c.id WHERE p.is_active = 1 AND p.is_popular = 1 ORDER BY p.sort_order ASC LIMIT ?");
+        $stmt->execute([(int)$limit]);
+        return $stmt->fetchAll();
+    } catch (Exception $e) { return []; }
+}
+
+function getDailySpecials($limit = 4) {
+    $pdo = getDB();
+    $stmt = $pdo->prepare("SELECT p.*, c.name as category_name FROM products p LEFT JOIN categories c ON p.category_id = c.id WHERE p.is_active = 1 AND p.is_daily_special = 1 ORDER BY RAND() LIMIT ?");
+    $stmt->execute([$limit]);
+    return $stmt->fetchAll();
+}
+
+function getProduct($id) {
+    $pdo = getDB();
+    $stmt = $pdo->prepare("SELECT p.*, c.name as category_name FROM products p LEFT JOIN categories c ON p.category_id = c.id WHERE p.id = ?");
+    $stmt->execute([$id]);
+    return $stmt->fetch();
+}
+
+function getProductImage($image, $placeholder = true) {
+    if (!empty($image)) return UPLOAD_URL . $image;
+    return $placeholder ? 'https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?w=400' : '';
+}
+
+function formatPrice($price) { return number_format((float)$price, 2, '.', '') . ' ₺'; }
+function e($string) { return htmlspecialchars($string ?? '', ENT_QUOTES, 'UTF-8'); }
+
+function tu($string) {
+    $string = $string ?? '';
+    $find    = ['ı', 'i', 'ş', 'ğ', 'ü', 'ö', 'ç', 'â', 'î', 'û'];
+    $replace = ['I', 'İ', 'Ş', 'Ğ', 'Ü', 'Ö', 'Ç', 'Â', 'Î', 'Û'];
+    return mb_strtoupper(str_replace($find, $replace, $string), 'UTF-8');
+}
+
+function eu($string) { return e(tu($string)); }
+
+function requireAuth() {
+    if (!isset($_SESSION['admin_logged_in']) || $_SESSION['admin_logged_in'] !== true) {
+        if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest') {
+            header('Content-Type: application/json; charset=utf-8');
+            http_response_code(401);
+            echo json_encode(['success' => false, 'error' => 'Oturum süresi dolmuş']);
+            exit;
+        }
+        header('Location: login.php');
+        exit;
+    }
+}
+
+function setFlash($type, $message) { $_SESSION['flash'] = ['type' => $type, 'message' => $message]; }
+function getFlash() {
+    if (isset($_SESSION['flash'])) { $flash = $_SESSION['flash']; unset($_SESSION['flash']); return $flash; }
+    return null;
+}
+
+function getLanguages($onlyActive = true) {
+    try {
+        $pdo = getDB();
+        $sql = "SELECT * FROM languages";
+        if ($onlyActive) $sql .= " WHERE is_active = 1";
+        $sql .= " ORDER BY sort_order ASC, name ASC";
+        $stmt = $pdo->query($sql);
+        return $stmt->fetchAll();
+    } catch (Exception $e) { return []; }
+}

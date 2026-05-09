@@ -1,0 +1,440 @@
+<?php
+/**
+ * GALLANT GALATA - Veritabanı Konfigürasyonu
+ * 
+ * cPanel'de veritabanı oluşturduktan sonra bu değerleri güncelleyin.
+ * cPanel > MySQL Databases bölümünden bu bilgilere ulaşabilirsiniz.
+ */
+
+// Veritabanı Bağlantı Bilgileri
+define('DB_HOST', 'localhost');           // Genellikle 'localhost' kalır
+define('DB_NAME', 'u398002296_menu');     // cPanel veritabanı adı
+define('DB_USER', 'u398002296_menu_user'); // cPanel veritabanı kullanıcı adı
+define('DB_PASS', 'menuuser**1@K');      // cPanel veritabanı şifresi
+define('DB_CHARSET', 'utf8mb4');
+
+// Site Ayarları
+define('SITE_URL', 'https://menu.valentinopatisserie.com.tr');  // Canlı domain adresi
+define('UPLOAD_PATH', __DIR__ . '/../assets/img/products/');
+define('UPLOAD_URL', SITE_URL . '/assets/img/products/');
+
+// Oturum başlat (output buffering içindeyse output üretmemesi için)
+if (session_status() === PHP_SESSION_NONE) {
+    // Output buffering varsa, session_start öncesi temizle
+    if (ob_get_level() > 0) {
+        ob_clean();
+    }
+    @session_start();
+}
+
+// Türkiye saat dilimini ayarla
+date_default_timezone_set('Europe/Istanbul');
+
+// Hata raporlama (Canlıda kapatın - şu an kapalı)
+error_reporting(0);
+ini_set('display_errors', 0);
+
+/**
+ * PDO ile Veritabanı Bağlantısı
+ */
+function getDB() {
+    static $pdo = null;
+    
+    if ($pdo === null) {
+        try {
+            $dsn = "mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=" . DB_CHARSET;
+            $options = [
+                PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                PDO::ATTR_EMULATE_PREPARES => false,
+            ];
+            $pdo = new PDO($dsn, DB_USER, DB_PASS, $options);
+            
+            // Türkçe karakter desteği için charset ayarlarını zorla
+            $pdo->exec("SET NAMES " . DB_CHARSET);
+            $pdo->exec("SET CHARACTER SET " . DB_CHARSET);
+            $pdo->exec("SET COLLATION_CONNECTION = 'utf8mb4_unicode_ci'");
+        } catch (PDOException $e) {
+            // API isteklerinde die() yerine exception fırlat
+            if (strpos($_SERVER['REQUEST_URI'] ?? '', '/api/') !== false) {
+                throw new PDOException("Veritabanı bağlantı hatası: " . $e->getMessage(), $e->getCode(), $e);
+            }
+            die("Veritabanı bağlantı hatası: " . $e->getMessage());
+        }
+    }
+    
+    return $pdo;
+}
+
+/**
+ * Site Ayarlarını Getir
+ */
+function getSetting($key, $default = '') {
+    try {
+        $pdo = getDB();
+        $stmt = $pdo->prepare("SELECT setting_value FROM settings WHERE setting_key = ?");
+        $stmt->execute([$key]);
+        $result = $stmt->fetch();
+        return $result ? $result['setting_value'] : $default;
+    } catch (Exception $e) {
+        return $default;
+    }
+}
+
+/**
+ * Site Ayarını Güncelle
+ */
+function updateSetting($key, $value) {
+    try {
+        $pdo = getDB();
+        // Önce var mı kontrol et
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM settings WHERE setting_key = ?");
+        $stmt->execute([$key]);
+        $exists = $stmt->fetchColumn() > 0;
+
+        if ($exists) {
+            $stmt = $pdo->prepare("UPDATE settings SET setting_value = ? WHERE setting_key = ?");
+            return $stmt->execute([$value, $key]);
+        } else {
+            $stmt = $pdo->prepare("INSERT INTO settings (setting_key, setting_value) VALUES (?, ?)");
+            return $stmt->execute([$key, $value]);
+        }
+    } catch (Exception $e) {
+        error_log('updateSetting error: ' . $e->getMessage());
+        return false;
+    }
+}
+
+/**
+ * Tüm Kategorileri Getir
+ */
+function getCategories($activeOnly = true) {
+    try {
+    $pdo = getDB();
+        
+        // Önce kategorileri çek
+    $sql = "SELECT c.*, COUNT(p.id) as product_count 
+            FROM categories c 
+            LEFT JOIN products p ON c.id = p.category_id AND p.is_active = 1
+            " . ($activeOnly ? "WHERE c.is_active = 1" : "") . "
+            GROUP BY c.id 
+            ORDER BY c.sort_order ASC";
+    $stmt = $pdo->query($sql);
+        $categories = $stmt->fetchAll();
+        
+        // Saate göre menü düzeni varsa uygula
+        try {
+            $timeBasedOrder = getActiveTimeBasedMenuOrder();
+            if (!empty($timeBasedOrder) && is_array($timeBasedOrder)) {
+                // Kategori ID'leri ile kategorileri eşleştir
+                $categoriesById = [];
+                foreach ($categories as $cat) {
+                    $categoriesById[$cat['id']] = $cat;
+                }
+                
+                // Sıralı kategori listesi oluştur
+                $orderedCategories = [];
+                foreach ($timeBasedOrder as $catId) {
+                    if (isset($categoriesById[$catId])) {
+                        $orderedCategories[] = $categoriesById[$catId];
+                        unset($categoriesById[$catId]);
+                    }
+                }
+                
+                // Kalan kategorileri sona ekle (sıralamada olmayan kategoriler)
+                foreach ($categoriesById as $cat) {
+                    $orderedCategories[] = $cat;
+                }
+                
+                return $orderedCategories;
+            }
+        } catch (Exception $e) {
+            // Saate göre menü hatası olursa normal sıralama kullan
+            error_log('Time-based menu ordering error: ' . $e->getMessage());
+        }
+        
+        return $categories;
+    } catch (Exception $e) {
+        error_log('getCategories error: ' . $e->getMessage());
+        return [];
+    }
+}
+
+/**
+ * Mevcut saat ve güne göre aktif time-based menü düzenini getir
+ */
+function getActiveTimeBasedMenuOrder() {
+    try {
+        $pdo = getDB();
+        
+        $tableCheck = $pdo->query("SHOW TABLES LIKE 'time_based_menu'");
+        if ($tableCheck->rowCount() === 0) return null;
+        
+        $currentTime = date('H:i:s');
+        $currentDay = (int)date('w'); // 0=Pazar
+        
+        // Gelişmiş zaman dilimi sorgusu (Gece yarısını geçen saatleri de destekler)
+        $sql = "SELECT * FROM time_based_menu 
+                WHERE is_active = 1 
+                AND FIND_IN_SET(?, days_of_week) > 0
+                AND (
+                    (start_time < end_time AND ? >= start_time AND ? <= end_time)
+                    OR
+                    (start_time > end_time AND (? >= start_time OR ? <= end_time))
+                    OR
+                    (start_time = end_time AND ? = start_time)
+                )
+                ORDER BY priority DESC, id DESC
+                LIMIT 1";
+        
+        $stmt = $pdo->prepare($sql);
+        // Parametreleri doğru eşleştirelim:
+        // 1. FIND_IN_SET(?) -> $currentDay
+        // 2. start_time < end_time AND ? >= start_time -> $currentTime
+        // 3. AND ? <= end_time -> $currentTime
+        // 4. start_time > end_time AND (? >= start_time -> $currentTime
+        // 5. OR ? <= end_time) -> $currentTime
+        // 6. start_time = end_time AND ? = start_time -> $currentTime
+        $stmt->execute([$currentDay, $currentTime, $currentTime, $currentTime, $currentTime, $currentTime]);
+        $timeSlot = $stmt->fetch();
+        
+        if ($timeSlot && !empty($timeSlot['category_order'])) {
+            $order = json_decode($timeSlot['category_order'], true);
+            return is_array($order) ? $order : null;
+        }
+        
+        return null;
+    } catch (Exception $e) {
+        error_log('Time-based menu error: ' . $e->getMessage());
+        return null;
+    }
+}
+
+/**
+ * Tek Kategori Getir
+ */
+function getCategory($id) {
+    $pdo = getDB();
+    $stmt = $pdo->prepare("SELECT * FROM categories WHERE id = ?");
+    $stmt->execute([$id]);
+    return $stmt->fetch();
+}
+
+/**
+ * Tüm Ürünleri Getir
+ */
+function getProducts($categoryId = null, $activeOnly = true, $limit = null) {
+    $pdo = getDB();
+    $sql = "SELECT p.*, c.name as category_name 
+            FROM products p 
+            LEFT JOIN categories c ON p.category_id = c.id 
+            WHERE 1=1";
+    
+    $params = [];
+    
+    if ($activeOnly) {
+        $sql .= " AND p.is_active = 1";
+    }
+    
+    if ($categoryId) {
+        $sql .= " AND p.category_id = ?";
+        $params[] = $categoryId;
+    }
+    
+    $sql .= " ORDER BY p.sort_order ASC, p.id DESC";
+    
+    if ($limit) {
+        $sql .= " LIMIT " . (int)$limit;
+    }
+    
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
+    return $stmt->fetchAll();
+}
+
+/**
+ * Popüler/Öne Çıkan Ürünleri Getir
+ * Ayarlardaki home_recommended_products değerine göre getirir, 
+ * yoksa is_popular işaretli olanları getirir.
+ */
+function getPopularProducts($limit = 8) {
+    try {
+        $pdo = getDB();
+        $recommendedProductsJson = getSetting('home_recommended_products', '[]');
+        $recommendedProducts = json_decode($recommendedProductsJson, true);
+        
+        if (is_array($recommendedProducts) && !empty($recommendedProducts)) {
+            // Sadece aktif olanları filtrele
+            $activeProducts = array_filter($recommendedProducts, function($p) {
+                return isset($p['active']) && ($p['active'] == 1 || $p['active'] === '1' || $p['active'] === true);
+            });
+            
+            if (empty($activeProducts)) {
+                return [];
+            }
+            
+            // Sıralamaya göre sırala
+            usort($activeProducts, function($a, $b) {
+                $orderA = isset($a['order']) ? (int)$a['order'] : 999;
+                $orderB = isset($b['order']) ? (int)$b['order'] : 999;
+                return $orderA - $orderB;
+            });
+            
+            $ids = array_column($activeProducts, 'id');
+            if ($limit) $ids = array_slice($ids, 0, $limit);
+            
+            if (empty($ids)) {
+                return [];
+            }
+            
+            $placeholders = implode(',', array_fill(0, count($ids), '?'));
+            $sql = "SELECT p.*, c.name as category_name 
+                    FROM products p 
+                    LEFT JOIN categories c ON p.category_id = c.id 
+                    WHERE p.is_active = 1 AND p.id IN ($placeholders)
+                    ORDER BY FIELD(p.id, $placeholders)";
+            
+            $stmt = $pdo->prepare($sql);
+            $params = array_merge($ids, $ids); // IN ve FIELD için iki kez
+            $stmt->execute($params);
+            return $stmt->fetchAll();
+        } else {
+            // Eski format desteği (virgülle ayrılmış ID'ler)
+            $recommendedIds = getSetting('home_recommended_products', '');
+            if (!empty($recommendedIds) && strpos($recommendedIds, '[') === false) {
+                $ids = explode(',', $recommendedIds);
+                $ids = array_filter(array_map('trim', $ids));
+                if (!empty($ids) && $limit) $ids = array_slice($ids, 0, $limit);
+                
+                if (!empty($ids)) {
+                    $placeholders = implode(',', array_fill(0, count($ids), '?'));
+                    $sql = "SELECT p.*, c.name as category_name 
+                            FROM products p 
+                            LEFT JOIN categories c ON p.category_id = c.id 
+                            WHERE p.is_active = 1 AND p.id IN ($placeholders)
+                            ORDER BY FIELD(p.id, $placeholders)";
+                    
+                    $stmt = $pdo->prepare($sql);
+                    $params = array_merge($ids, $ids);
+                    $stmt->execute($params);
+                    return $stmt->fetchAll();
+                }
+            }
+            
+            // Fallback to legacy is_popular logic
+            $stmt = $pdo->prepare("SELECT p.*, c.name as category_name 
+                                   FROM products p 
+                                   LEFT JOIN categories c ON p.category_id = c.id 
+                                   WHERE p.is_active = 1 AND p.is_popular = 1 
+                                   ORDER BY p.sort_order ASC 
+                                   LIMIT ?");
+            $stmt->execute([(int)$limit]);
+            return $stmt->fetchAll();
+        }
+    } catch (Exception $e) {
+        error_log('getPopularProducts error: ' . $e->getMessage());
+        return [];
+    }
+}
+
+/**
+ * Günün Lezzetlerini Getir
+ */
+function getDailySpecials($limit = 4) {
+    $pdo = getDB();
+    $stmt = $pdo->prepare("SELECT p.*, c.name as category_name 
+                           FROM products p 
+                           LEFT JOIN categories c ON p.category_id = c.id 
+                           WHERE p.is_active = 1 AND p.is_daily_special = 1 
+                           ORDER BY RAND() 
+                           LIMIT ?");
+    $stmt->execute([$limit]);
+    return $stmt->fetchAll();
+}
+
+/**
+ * Tek Ürün Getir
+ */
+function getProduct($id) {
+    $pdo = getDB();
+    $stmt = $pdo->prepare("SELECT p.*, c.name as category_name 
+                           FROM products p 
+                           LEFT JOIN categories c ON p.category_id = c.id 
+                           WHERE p.id = ?");
+    $stmt->execute([$id]);
+    return $stmt->fetch();
+}
+
+/**
+ * Ürün Resmi URL'si
+ */
+function getProductImage($image, $placeholder = true) {
+    if ($image && file_exists(UPLOAD_PATH . $image)) {
+        return UPLOAD_URL . $image;
+    }
+    return $placeholder ? 'https://images.unsplash.com/photo-1495474472287-4d71bcdd2085?w=400' : '';
+}
+
+/**
+ * Fiyat Formatla
+ */
+function formatPrice($price) {
+    return number_format($price, 2, '.', '') . ' ₺';
+}
+
+/**
+ * Güvenli Metin Çıktısı
+ */
+function e($string) {
+    return htmlspecialchars($string, ENT_QUOTES, 'UTF-8');
+}
+
+/**
+ * Admin Oturum Kontrolü
+ */
+function requireAuth() {
+    if (!isset($_SESSION['admin_logged_in']) || $_SESSION['admin_logged_in'] !== true) {
+        // AJAX isteği mi kontrol et
+        if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) == 'xmlhttprequest') {
+            header('Content-Type: application/json; charset=utf-8');
+            http_response_code(401);
+            echo json_encode(['success' => false, 'error' => 'Oturum süresi dolmuş, lütfen sayfayı yenileyip tekrar giriş yapın.']);
+            exit;
+        }
+        header('Location: login.php');
+        exit;
+    }
+}
+
+/**
+ * Flash Mesaj Sistemi
+ */
+function setFlash($type, $message) {
+    $_SESSION['flash'] = ['type' => $type, 'message' => $message];
+}
+
+function getFlash() {
+    if (isset($_SESSION['flash'])) {
+        $flash = $_SESSION['flash'];
+        unset($_SESSION['flash']);
+        return $flash;
+    }
+    return null;
+}
+
+function getLanguages($onlyActive = true) {
+    try {
+        $pdo = getDB();
+        $sql = "SELECT * FROM languages";
+        if ($onlyActive) {
+            $sql .= " WHERE is_active = 1";
+        }
+        $sql .= " ORDER BY sort_order ASC, name ASC";
+        $stmt = $pdo->query($sql);
+        return $stmt->fetchAll();
+    } catch (Exception $e) {
+        error_log('getLanguages error: ' . $e->getMessage());
+        return [];
+    }
+}
+?>
